@@ -2,6 +2,7 @@ package main
 
 import (
 	b64 "encoding/base64"
+	"encoding/gob"
 	"errors"
 	"fmt"
 	"html/template"
@@ -16,7 +17,9 @@ import (
 
 	"github.com/bitly/oauth2_proxy/cookie"
 	"github.com/bitly/oauth2_proxy/providers"
+	"github.com/gorilla/securecookie"
 	"github.com/mbland/hmacauth"
+	"github.com/quasoft/memstore"
 )
 
 const SignatureHeader = "GAP-Signature"
@@ -72,6 +75,7 @@ type OAuthProxy struct {
 	compiledRegex       []*regexp.Regexp
 	templates           *template.Template
 	Footer              string
+	SessionStore        *memstore.MemStore
 }
 
 type UpstreamProxy struct {
@@ -117,6 +121,7 @@ func NewFileServer(path string, filesystemPath string) (proxy http.Handler) {
 
 func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 	serveMux := http.NewServeMux()
+
 	var auth hmacauth.HmacAuth
 	if sigData := opts.signatureData; sigData != nil {
 		auth = hmacauth.NewHmacAuth(sigData.hash, []byte(sigData.key),
@@ -162,14 +167,14 @@ func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 
 	log.Printf("Cookie settings: name:%s secure(https):%v httponly:%v expiry:%s domain:%s refresh:%s", opts.CookieName, opts.CookieSecure, opts.CookieHttpOnly, opts.CookieExpire, opts.CookieDomain, refresh)
 
-	var cipher *cookie.Cipher
-	if opts.PassAccessToken || (opts.CookieRefresh != time.Duration(0)) {
-		var err error
-		cipher, err = cookie.NewCipher(secretBytes(opts.CookieSecret))
-		if err != nil {
-			log.Fatal("cookie-secret error: ", err)
-		}
-	}
+	// using random keys here means we lose sessions on restart
+	var store = memstore.NewMemStore(
+		[]byte(securecookie.GenerateRandomKey(32)),
+		[]byte(securecookie.GenerateRandomKey(32)),
+	)
+
+	// needed to encode expiration time into the session
+	gob.Register(time.Time{})
 
 	return &OAuthProxy{
 		CookieName:     opts.CookieName,
@@ -203,10 +208,9 @@ func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 		BasicAuthPassword:  opts.BasicAuthPassword,
 		PassAccessToken:    opts.PassAccessToken,
 		SkipProviderButton: opts.SkipProviderButton,
-		CookieCipher:       cipher,
 		templates:          loadTemplates(opts.CustomTemplatesDir),
 		Footer:             opts.Footer,
-	}
+		SessionStore:       store}
 }
 
 func (p *OAuthProxy) GetRedirectURI(host string) string {
@@ -311,37 +315,75 @@ func (p *OAuthProxy) ClearSessionCookie(rw http.ResponseWriter, req *http.Reques
 	}
 }
 
+func (p *OAuthProxy) SetPersistentSessionCookie(rw http.ResponseWriter, req *http.Request, s *providers.SessionState) {
+	// Get a session. Get() always returns a session, even if empty.
+	session, err := p.SessionStore.Get(req, p.CookieName)
+	if err != nil {
+		http.Error(rw, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	session.Values["AccessToken"] = s.AccessToken
+	session.Values["ExpiresOn"] = s.ExpiresOn
+	session.Values["RefreshToken"] = s.RefreshToken
+	session.Values["Email"] = s.Email
+	session.Values["User"] = strings.Split(s.Email, "@")[0]
+	session.Values["IDToken"] = s.IDToken
+
+	fmt.Printf("Saving IDToken %s", s.IDToken)
+
+	fmt.Println("--- Saving session")
+	fmt.Println(session.Values["AccessToken"])
+	// Save it before we write to the response/return from the handler.
+	session.Save(req, rw)
+}
+
 func (p *OAuthProxy) SetSessionCookie(rw http.ResponseWriter, req *http.Request, val string) {
 	http.SetCookie(rw, p.MakeSessionCookie(req, val, p.CookieExpire, time.Now()))
 }
 
-func (p *OAuthProxy) LoadCookiedSession(req *http.Request) (*providers.SessionState, time.Duration, error) {
+func (p *OAuthProxy) LoadPersistedSession(req *http.Request) (*providers.SessionState, time.Duration, error) {
 	var age time.Duration
-	c, err := req.Cookie(p.CookieName)
+
+	session, err := p.SessionStore.Get(req, p.CookieName)
+
 	if err != nil {
-		// always http.ErrNoCookie
+		fmt.Printf("err")
+	}
+
+	if session.IsNew == true {
 		return nil, age, fmt.Errorf("Cookie %q not present", p.CookieName)
 	}
-	val, timestamp, ok := cookie.Validate(c, p.CookieSeed, p.CookieExpire)
+
+	email := session.Values["Email"].(string)
+	user := session.Values["User"].(string)
+
+	fmt.Printf("Persisted value email: %s", email)
+
+	ok := false
+
+	s := &providers.SessionState{User: user, Email: email}
+	s.AccessToken, ok = session.Values["AccessToken"].(string)
 	if !ok {
-		return nil, age, errors.New("Cookie Signature not valid")
+		// nothing
 	}
-
-	session, err := p.provider.SessionFromCookie(val, p.CookieCipher)
-	if err != nil {
-		return nil, age, err
+	s.RefreshToken, ok = session.Values["RefreshToken"].(string)
+	if !ok {
+		// nothing
 	}
+	s.IDToken, ok = session.Values["IDToken"].(string)
+	if !ok {
+		// nothing
+	}
+	fmt.Printf("Persisted accesstoken value: %s", s.AccessToken)
 
-	age = time.Now().Truncate(time.Second).Sub(timestamp)
-	return session, age, nil
+	return s, time.Now().Truncate(time.Second).Sub(time.Now()), nil
 }
 
 func (p *OAuthProxy) SaveSession(rw http.ResponseWriter, req *http.Request, s *providers.SessionState) error {
-	value, err := p.provider.CookieForSession(s, p.CookieCipher)
-	if err != nil {
-		return err
-	}
-	p.SetSessionCookie(rw, req, value)
+
+	fmt.Printf("session.email %s ", s.Email)
+	p.SetPersistentSessionCookie(rw, req, s) // this is the raw sessionstore object
 	return nil
 }
 
@@ -611,10 +653,15 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) int
 	var saveSession, clearSession, revalidated bool
 	remoteAddr := getRemoteAddr(req)
 
-	session, sessionAge, err := p.LoadCookiedSession(req)
+	session, sessionAge, err := p.LoadPersistedSession(req)
 	if err != nil {
 		log.Printf("%s %s", remoteAddr, err)
 	}
+
+	if session != nil {
+		fmt.Printf("Loaded Access Token %s", session.AccessToken)
+	}
+
 	if session != nil && sessionAge > p.CookieRefresh && p.CookieRefresh != time.Duration(0) {
 		log.Printf("%s refreshing %s old session cookie for %s (refresh after %s)", remoteAddr, sessionAge, session, p.CookieRefresh)
 		saveSession = true
@@ -683,12 +730,14 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) int
 			req.Header["X-Forwarded-Email"] = []string{session.Email}
 		}
 	}
+
 	if p.PassUserHeaders {
 		req.Header["X-Forwarded-User"] = []string{session.User}
 		if session.Email != "" {
 			req.Header["X-Forwarded-Email"] = []string{session.Email}
 		}
 	}
+
 	if p.SetXAuthRequest {
 		rw.Header().Set("X-Auth-Request-User", session.User)
 		if session.Email != "" {
@@ -696,13 +745,17 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) int
 		}
 		if p.PassAccessToken && session.AccessToken != "" {
 			rw.Header().Set("X-Auth-Request-Access-Token", session.AccessToken)
-			rw.Header().Set("X-Auth-Request-ID-Token", session.IdToken)
+			// TODO: make this its own cmd line option
+			rw.Header().Set("X-Auth-Request-ID-Token", session.IDToken)
 		}
 	}
+
 	if p.PassAccessToken && session.AccessToken != "" {
 		req.Header["X-Forwarded-Access-Token"] = []string{session.AccessToken}
-		req.Header["X-Forwarded-ID-Token"] = []string{session.IdToken}
+		// TODO: make this its own cmd line option
+		req.Header["X-Forwarded-ID-Token"] = []string{session.IDToken}
 	}
+
 	if session.Email == "" {
 		rw.Header().Set("GAP-Auth", session.User)
 	} else {

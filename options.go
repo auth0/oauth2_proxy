@@ -66,6 +66,7 @@ type Options struct {
 	// potential overrides.
 	Provider          string `flag:"provider" cfg:"provider"`
 	OIDCIssuerURL     string `flag:"oidc-issuer-url" cfg:"oidc_issuer_url"`
+	OIDCAudience      string `flag:"oidc-audience" cfg:"oidc_audience"`
 	LoginURL          string `flag:"login-url" cfg:"login_url"`
 	RedeemURL         string `flag:"redeem-url" cfg:"redeem_url"`
 	ProfileURL        string `flag:"profile-url" cfg:"profile_url"`
@@ -256,6 +257,7 @@ func parseProviderInfo(o *Options, msgs []string) []string {
 	p.ProfileURL, msgs = parseURL(o.ProfileURL, "profile", msgs)
 	p.ValidateURL, msgs = parseURL(o.ValidateURL, "validate", msgs)
 	p.ProtectedResource, msgs = parseURL(o.ProtectedResource, "resource", msgs)
+	p.Audience = o.OIDCAudience
 
 	o.provider = providers.New(o.Provider, p)
 	switch p := o.provider.(type) {
