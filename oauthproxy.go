@@ -69,6 +69,7 @@ type OAuthProxy struct {
 	PassUserHeaders     bool
 	BasicAuthPassword   string
 	PassAccessToken     bool
+	PassIdToken         bool
 	CookieCipher        *cookie.Cipher
 	skipAuthRegex       []string
 	skipAuthPreflight   bool
@@ -207,6 +208,7 @@ func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 		PassUserHeaders:    opts.PassUserHeaders,
 		BasicAuthPassword:  opts.BasicAuthPassword,
 		PassAccessToken:    opts.PassAccessToken,
+		PassIdToken:        opts.PassIdToken,
 		SkipProviderButton: opts.SkipProviderButton,
 		templates:          loadTemplates(opts.CustomTemplatesDir),
 		Footer:             opts.Footer,
@@ -745,14 +747,17 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) int
 		}
 		if p.PassAccessToken && session.AccessToken != "" {
 			rw.Header().Set("X-Auth-Request-Access-Token", session.AccessToken)
-			// TODO: make this its own cmd line option
+		}
+		if p.PassIdToken && session.IDToken != "" {
 			rw.Header().Set("X-Auth-Request-ID-Token", session.IDToken)
 		}
 	}
 
 	if p.PassAccessToken && session.AccessToken != "" {
 		req.Header["X-Forwarded-Access-Token"] = []string{session.AccessToken}
-		// TODO: make this its own cmd line option
+	}
+
+	if p.PassIdToken && session.IDToken != "" {
 		req.Header["X-Forwarded-ID-Token"] = []string{session.IDToken}
 	}
 
