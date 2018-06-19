@@ -32,6 +32,9 @@ func (s *SessionState) String() string {
 	if s.RefreshToken != "" {
 		o += " refresh_token:true"
 	}
+	if s.IDToken != "" {
+		o += " id_token:true"
+	}
 	return o + "}"
 }
 

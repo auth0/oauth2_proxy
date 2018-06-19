@@ -17,7 +17,6 @@ import (
 
 	"github.com/bitly/oauth2_proxy/cookie"
 	"github.com/bitly/oauth2_proxy/providers"
-	"github.com/gorilla/securecookie"
 	"github.com/mbland/hmacauth"
 	"github.com/quasoft/memstore"
 )
@@ -168,11 +167,8 @@ func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 
 	log.Printf("Cookie settings: name:%s secure(https):%v httponly:%v expiry:%s domain:%s refresh:%s", opts.CookieName, opts.CookieSecure, opts.CookieHttpOnly, opts.CookieExpire, opts.CookieDomain, refresh)
 
-	// using random keys here means we lose sessions on restart
 	var store = memstore.NewMemStore(
-		[]byte(securecookie.GenerateRandomKey(32)),
-		[]byte(securecookie.GenerateRandomKey(32)),
-	)
+		[]byte([]byte(opts.CookieSecret)))
 
 	// needed to encode expiration time into the session
 	gob.Register(time.Time{})
@@ -332,16 +328,7 @@ func (p *OAuthProxy) SetPersistentSessionCookie(rw http.ResponseWriter, req *htt
 	session.Values["User"] = strings.Split(s.Email, "@")[0]
 	session.Values["IDToken"] = s.IDToken
 
-	fmt.Printf("Saving IDToken %s", s.IDToken)
-
-	fmt.Println("--- Saving session")
-	fmt.Println(session.Values["AccessToken"])
-	// Save it before we write to the response/return from the handler.
 	session.Save(req, rw)
-}
-
-func (p *OAuthProxy) SetSessionCookie(rw http.ResponseWriter, req *http.Request, val string) {
-	http.SetCookie(rw, p.MakeSessionCookie(req, val, p.CookieExpire, time.Now()))
 }
 
 func (p *OAuthProxy) LoadPersistedSession(req *http.Request) (*providers.SessionState, time.Duration, error) {
@@ -360,8 +347,6 @@ func (p *OAuthProxy) LoadPersistedSession(req *http.Request) (*providers.Session
 	email := session.Values["Email"].(string)
 	user := session.Values["User"].(string)
 
-	fmt.Printf("Persisted value email: %s", email)
-
 	ok := false
 
 	s := &providers.SessionState{User: user, Email: email}
@@ -377,14 +362,11 @@ func (p *OAuthProxy) LoadPersistedSession(req *http.Request) (*providers.Session
 	if !ok {
 		// nothing
 	}
-	fmt.Printf("Persisted accesstoken value: %s", s.AccessToken)
 
 	return s, time.Now().Truncate(time.Second).Sub(time.Now()), nil
 }
 
 func (p *OAuthProxy) SaveSession(rw http.ResponseWriter, req *http.Request, s *providers.SessionState) error {
-
-	fmt.Printf("session.email %s ", s.Email)
 	p.SetPersistentSessionCookie(rw, req, s) // this is the raw sessionstore object
 	return nil
 }
@@ -658,10 +640,6 @@ func (p *OAuthProxy) Authenticate(rw http.ResponseWriter, req *http.Request) int
 	session, sessionAge, err := p.LoadPersistedSession(req)
 	if err != nil {
 		log.Printf("%s %s", remoteAddr, err)
-	}
-
-	if session != nil {
-		fmt.Printf("Loaded Access Token %s", session.AccessToken)
 	}
 
 	if session != nil && sessionAge > p.CookieRefresh && p.CookieRefresh != time.Duration(0) {
