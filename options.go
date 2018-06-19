@@ -23,7 +23,7 @@ type Options struct {
 	ProxyPrefix  string `flag:"proxy-prefix" cfg:"proxy-prefix"`
 	HttpAddress  string `flag:"http-address" cfg:"http_address"`
 	HttpsAddress string `flag:"https-address" cfg:"https_address"`
-	RedirectURL  string `flag:"redirect-url" cfg:"redirect_url"`
+	RedirectURL  string `flag:"redirect-url" cfg:"redirect_url" env:"OAUTH2_PROXY_REDIRECT_URL"`
 	ClientID     string `flag:"client-id" cfg:"client_id" env:"OAUTH2_PROXY_CLIENT_ID"`
 	ClientSecret string `flag:"client-secret" cfg:"client_secret" env:"OAUTH2_PROXY_CLIENT_SECRET"`
 	TLSCertFile  string `flag:"tls-cert" cfg:"tls_cert_file"`
@@ -55,6 +55,7 @@ type Options struct {
 	PassBasicAuth         bool     `flag:"pass-basic-auth" cfg:"pass_basic_auth"`
 	BasicAuthPassword     string   `flag:"basic-auth-password" cfg:"basic_auth_password"`
 	PassAccessToken       bool     `flag:"pass-access-token" cfg:"pass_access_token"`
+	PassIdToken           bool     `flag:"pass-id-token" cfg:"pass_id_token"`
 	PassHostHeader        bool     `flag:"pass-host-header" cfg:"pass_host_header"`
 	SkipProviderButton    bool     `flag:"skip-provider-button" cfg:"skip_provider_button"`
 	PassUserHeaders       bool     `flag:"pass-user-headers" cfg:"pass_user_headers"`
@@ -66,6 +67,7 @@ type Options struct {
 	// potential overrides.
 	Provider          string `flag:"provider" cfg:"provider"`
 	OIDCIssuerURL     string `flag:"oidc-issuer-url" cfg:"oidc_issuer_url"`
+	OIDCAudience      string `flag:"oidc-audience" cfg:"oidc_audience"`
 	LoginURL          string `flag:"login-url" cfg:"login_url"`
 	RedeemURL         string `flag:"redeem-url" cfg:"redeem_url"`
 	ProfileURL        string `flag:"profile-url" cfg:"profile_url"`
@@ -109,6 +111,7 @@ func NewOptions() *Options {
 		PassBasicAuth:        true,
 		PassUserHeaders:      true,
 		PassAccessToken:      false,
+		PassIdToken:          false,
 		PassHostHeader:       true,
 		ApprovalPrompt:       "force",
 		RequestLogging:       true,
@@ -256,6 +259,7 @@ func parseProviderInfo(o *Options, msgs []string) []string {
 	p.ProfileURL, msgs = parseURL(o.ProfileURL, "profile", msgs)
 	p.ValidateURL, msgs = parseURL(o.ValidateURL, "validate", msgs)
 	p.ProtectedResource, msgs = parseURL(o.ProtectedResource, "resource", msgs)
+	p.Audience = o.OIDCAudience
 
 	o.provider = providers.New(o.Provider, p)
 	switch p := o.provider.(type) {
